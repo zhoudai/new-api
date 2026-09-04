@@ -1,0 +1,6 @@
+# 本地 POC 复用已有官方运行层，源码构建产物由宿主机注入。
+FROM calciumion/new-api:latest
+
+COPY new-api /new-api
+
+RUN chmod +x /new-api
