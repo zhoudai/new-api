@@ -62,6 +62,12 @@ func SetApiRouter(router *gin.Engine) {
 		apiRouter.GET("/sso/authorize", middleware.UserAuth(), middleware.CriticalRateLimit(), middleware.DisableCache(), controller.SSOAuthorize)
 		apiRouter.POST("/sso/token", middleware.CriticalRateLimit(), middleware.DisableCache(), anonymousRequestBodyLimit, controller.SSOToken)
 		apiRouter.GET("/ratio_config", middleware.CriticalRateLimit(), controller.GetRatioConfig)
+		apiRouter.POST("/project-credentials/verify", middleware.DisableCache(), controller.VerifyProjectCredential)
+		projectCredentials := apiRouter.Group("/project-credentials", middleware.AdminAuth(), middleware.DisableCache(), middleware.CriticalRateLimit())
+		projectCredentials.GET("", controller.ListProjectCredentials)
+		projectCredentials.GET("/audits", controller.ListProjectCredentialAudits)
+		projectCredentials.POST("", anonymousRequestBodyLimit, controller.ChangeProjectCredential)
+		projectCredentials.POST("/:project_id/:action", anonymousRequestBodyLimit, controller.ChangeProjectCredential)
 
 		apiRouter.POST("/stripe/webhook", anonymousRequestBodyLimit, controller.StripeWebhook)
 		apiRouter.POST("/creem/webhook", anonymousRequestBodyLimit, controller.CreemWebhook)
