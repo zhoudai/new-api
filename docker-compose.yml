@@ -28,7 +28,34 @@ services:
       - AI_BRIDGE_UPSTREAM_BASE_URL=http://new-api:3000
       - AI_BRIDGE_PROJECT_ID=${AI_BRIDGE_PROJECT_ID:-}
       - AI_BRIDGE_PROJECT_KEY=${AI_BRIDGE_PROJECT_KEY:-}
+      - AI_BRIDGE_CREDENTIAL_VERIFY_URL=${AI_BRIDGE_CREDENTIAL_VERIFY_URL:-}
       - AI_BRIDGE_ENTERPRISE_TOKENS=${AI_BRIDGE_ENTERPRISE_TOKENS:-}
+    depends_on:
+      - new-api
+    networks:
+      - new-api-network
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3001/health/ready | grep -q 'ready' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # edu-training 使用独立项目凭证、企业映射和端口，避免与其他项目串用配置。
+  edu-training-project-bridge:
+    profiles: ["bridge"]
+    build:
+      context: ./bridge
+    container_name: ai-platform-edu-training-project-bridge
+    restart: always
+    ports:
+      - "3002:3001"
+    environment:
+      - AI_BRIDGE_LISTEN_ADDR=:3001
+      - AI_BRIDGE_UPSTREAM_BASE_URL=http://new-api:3000
+      - AI_BRIDGE_PROJECT_ID=${EDU_TRAINING_BRIDGE_PROJECT_ID:-}
+      - AI_BRIDGE_PROJECT_KEY=${EDU_TRAINING_BRIDGE_PROJECT_KEY:-}
+      - AI_BRIDGE_CREDENTIAL_VERIFY_URL=${EDU_TRAINING_BRIDGE_CREDENTIAL_VERIFY_URL:-}
+      - AI_BRIDGE_ENTERPRISE_TOKENS=${EDU_TRAINING_BRIDGE_ENTERPRISE_TOKENS:-}
     depends_on:
       - new-api
     networks:

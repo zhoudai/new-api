@@ -14,7 +14,8 @@ logs
 web/dist
 web/node_modules
 .env
-bridge/.env.local
+bridge/.env.hedezhongcheng.local
+bridge/.env.edu-training.local
 one-api
 new-api
 /__debug_bin*

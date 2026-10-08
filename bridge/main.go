@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -23,11 +24,12 @@ const (
 )
 
 type bridgeConfig struct {
-	listenAddr       string
-	upstreamBaseURL  *url.URL
-	projectID        string
-	projectKey       string
-	enterpriseTokens map[string]string
+	listenAddr          string
+	upstreamBaseURL     *url.URL
+	projectID           string
+	projectKey          string
+	credentialVerifyURL string
+	enterpriseTokens    map[string]string
 }
 
 func loadConfigFromEnv(getenv func(string) string) (bridgeConfig, error) {
@@ -38,10 +40,18 @@ func loadConfigFromEnv(getenv func(string) string) (bridgeConfig, error) {
 	baseURL := getenv("AI_BRIDGE_UPSTREAM_BASE_URL")
 	projectID := getenv("AI_BRIDGE_PROJECT_ID")
 	projectKey := getenv("AI_BRIDGE_PROJECT_KEY")
+	verifyURL := getenv("AI_BRIDGE_CREDENTIAL_VERIFY_URL")
+	if verifyURL != "" {
+		parsed, err := url.Parse(verifyURL)
+		if err != nil || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
+			return bridgeConfig{}, errors.New("AI_BRIDGE_CREDENTIAL_VERIFY_URL 必须是受信任的平台 HTTP(S) 地址")
+		}
+	} else if strings.TrimSpace(projectKey) == "" {
+		return bridgeConfig{}, errors.New("未配置项目凭证校验地址或 POC 项目凭证")
+	}
 	for name, value := range map[string]string{
 		"AI_BRIDGE_UPSTREAM_BASE_URL": baseURL,
 		"AI_BRIDGE_PROJECT_ID":        projectID,
-		"AI_BRIDGE_PROJECT_KEY":       projectKey,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return bridgeConfig{}, fmt.Errorf("%s 未配置", name)
@@ -60,11 +70,12 @@ func loadConfigFromEnv(getenv func(string) string) (bridgeConfig, error) {
 		return bridgeConfig{}, errors.New("AI_BRIDGE_PROJECT_ID 格式无效")
 	}
 	return bridgeConfig{
-		listenAddr:       listenAddr,
-		upstreamBaseURL:  upstream,
-		projectID:        projectID,
-		projectKey:       projectKey,
-		enterpriseTokens: tokens,
+		listenAddr:          listenAddr,
+		upstreamBaseURL:     upstream,
+		projectID:           projectID,
+		projectKey:          projectKey,
+		credentialVerifyURL: verifyURL,
+		enterpriseTokens:    tokens,
 	}, nil
 }
 
@@ -108,6 +119,8 @@ func validIdentifier(value string) bool {
 }
 
 func newBridgeHandler(config bridgeConfig) http.Handler {
+	// 不跟随重定向，防止项目凭证被带往其他地址；每次请求实时校验，不缓存放行结果。
+	verifyClient := &http.Client{Timeout: 5 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health/ready", func(response http.ResponseWriter, request *http.Request) {
 		writeJSON(response, http.StatusOK, map[string]string{"status": "ready"})
@@ -122,7 +135,35 @@ func newBridgeHandler(config bridgeConfig) http.Handler {
 			return
 		}
 		projectKey := bearerToken(request.Header.Get("Authorization"))
-		if projectKey == "" || subtle.ConstantTimeCompare([]byte(projectKey), []byte(config.projectKey)) != 1 {
+		if projectKey == "" || len(projectKey) > 256 {
+			writeJSON(response, http.StatusUnauthorized, map[string]string{"error": "项目凭证无效"})
+			return
+		}
+		if config.credentialVerifyURL != "" {
+			ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
+			defer cancel()
+			verifyRequest, err := http.NewRequestWithContext(ctx, http.MethodPost, config.credentialVerifyURL, nil)
+			if err != nil {
+				writeJSON(response, http.StatusServiceUnavailable, map[string]string{"error": "项目凭证校验暂时不可用"})
+				return
+			}
+			verifyRequest.Header.Set("Authorization", "Bearer "+projectKey)
+			verifyRequest.Header.Set(projectIDHeader, config.projectID)
+			verified, err := verifyClient.Do(verifyRequest)
+			if err != nil {
+				writeJSON(response, http.StatusServiceUnavailable, map[string]string{"error": "项目凭证校验暂时不可用"})
+				return
+			}
+			verified.Body.Close()
+			if verified.StatusCode != http.StatusNoContent {
+				status := http.StatusServiceUnavailable
+				if verified.StatusCode == http.StatusUnauthorized {
+					status = http.StatusUnauthorized
+				}
+				writeJSON(response, status, map[string]string{"error": "项目凭证校验未通过"})
+				return
+			}
+		} else if subtle.ConstantTimeCompare([]byte(projectKey), []byte(config.projectKey)) != 1 {
 			writeJSON(response, http.StatusUnauthorized, map[string]string{"error": "项目凭证无效"})
 			return
 		}
