@@ -37,7 +37,7 @@ import { useAuthStore } from '@/stores/auth-store'
 import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
 
 import { ModelPricingPanel } from '../model-pricing-panel'
-import type { PricingValues } from '../pricing'
+import { pricingOptions, type PricingValues } from '../pricing'
 
 const clients: QueryClient[] = []
 const originalColumnVisibility = localStorage.getItem(
@@ -160,6 +160,58 @@ it.each(['none', 'standard', 'claude_ttl'] as const)(
     ).toBeDisabled()
   }
 )
+
+it('does not request the public pricing catalog from the admin model-pricing editor', async () => {
+  useAuthStore
+    .getState()
+    .auth.setUser({ id: 1, username: 'administrator', role: 100 })
+  const expression = 'tier("standard", p * 1 + c * 2)'
+  const requests: string[] = []
+  vi.spyOn(api, 'get').mockImplementation(async (url) => {
+    requests.push(url)
+    return {
+      data:
+        url === '/api/option/model_pricing'
+          ? {
+              success: true,
+              data: {
+                entries: [
+                  {
+                    model_name: 'example-model',
+                    version: 'v1',
+                    configured: {
+                      'billing_setting.billing_mode': 'tiered_expr',
+                      'billing_setting.billing_expr': expression,
+                    },
+                    effective: {
+                      'billing_setting.billing_mode': 'tiered_expr',
+                      'billing_setting.billing_expr': expression,
+                    },
+                  },
+                ],
+                options: pricingOptions({}),
+                empty_version: 'empty',
+              },
+            }
+          : { success: true, data: {} },
+    }
+  })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  clients.push(client)
+
+  render(
+    <QueryClientProvider client={client}>
+      <ModelPricingPanel modelName='example-model' />
+    </QueryClientProvider>
+  )
+
+  expect(
+    await screen.findByRole('region', { name: 'Current Billing' })
+  ).toBeVisible()
+  expect(requests).not.toContain('/api/pricing')
+})
 
 function renderEditor(embedded = false) {
   vi.spyOn(api, 'get').mockResolvedValue({

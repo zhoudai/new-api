@@ -52,7 +52,6 @@ import {
   applyPricingDraft,
   pricingOptions,
 } from '@/features/model-pricing/pricing'
-import { usePricingData } from '@/features/pricing/hooks/use-pricing-data'
 import { splitPluginBillingExprKey } from '@/features/pricing/lib/plugin-pricing'
 import { useMediaQuery } from '@/hooks'
 
@@ -149,7 +148,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
   ref
 ) {
   const { t } = useTranslation()
-  const { models: pricingModels } = usePricingData()
+  const modelPricing = useModelPricing()
   const isMobile = useMediaQuery('(max-width: 767px)')
   const [sheetOpen, setSheetOpen] = useState(false)
   const [editorOpen, setEditorOpen] = useState(false)
@@ -216,15 +215,14 @@ const ModelRatioVisualEditorComponent = forwardRef<
   const taskModelNames = useMemo(
     () =>
       new Set(
-        pricingModels
+        (modelPricing.data?.entries ?? [])
           .filter(
-            (model) =>
-              model.billing_usage_schema &&
-              Object.keys(model.billing_usage_schema).length > 0
+            (entry) =>
+              entry.usage_schema && Object.keys(entry.usage_schema).length > 0
           )
-          .map((model) => model.model_name)
+          .map((entry) => entry.model_name)
       ),
-    [pricingModels]
+    [modelPricing.data?.entries]
   )
 
   const models = useMemo(() => {
@@ -748,6 +746,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
           {editorOpen ? (
             <ModelPricingEditorPanel
               ref={editorPanelRef}
+              loadPricingCatalog={false}
               editData={editData}
               pluginVariants={
                 pricingConfig.data?.entries.find(
@@ -798,6 +797,7 @@ const ModelRatioVisualEditorComponent = forwardRef<
           ref={editorPanelRef}
           open={sheetOpen}
           onOpenChange={setSheetOpen}
+          loadPricingCatalog={false}
           editData={editData}
           pluginVariants={
             pricingConfig.data?.entries.find(

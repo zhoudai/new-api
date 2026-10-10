@@ -163,6 +163,7 @@ export function ModelPricingPanel(props: {
         embedded
         ref={editor}
         editData={editData}
+        loadPricingCatalog={false}
         usageSchema={entry.usage_schema}
         pluginVariants={entry.plugin_variants}
         onDirtyChange={props.onDirtyChange}

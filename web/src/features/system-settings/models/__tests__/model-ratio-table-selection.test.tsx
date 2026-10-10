@@ -24,32 +24,73 @@ import {
   waitFor,
   within,
 } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { ROLE } from '@/lib/roles'
+import { useAuthStore } from '@/stores/auth-store'
 
 import { ModelRatioVisualEditor } from '../model-ratio-visual-editor'
 
 let client: QueryClient | undefined
+const originalAuth = useAuthStore.getState().auth
 
 afterEach(() => {
   client?.clear()
   localStorage.clear()
   window.getSelection()?.removeAllRanges()
+  useAuthStore.setState({ auth: originalAuth })
   vi.restoreAllMocks()
 })
 
-async function renderEditor() {
+async function renderEditor(isMobile = false, taskModelNames: string[] = []) {
+  useAuthStore.setState({
+    auth: {
+      ...originalAuth,
+      user: { id: 1, username: 'admin', role: ROLE.SUPER_ADMIN },
+    },
+  })
+  if (isMobile) {
+    const matchMedia = window.matchMedia.bind(window)
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({
+      ...matchMedia(query),
+      matches: query === '(max-width: 767px)' || matchMedia(query).matches,
+    }))
+  }
+
   vi.spyOn(api, 'get').mockImplementation(async (url) => {
     if (url === '/api/pricing') {
       return { data: { success: true, data: [], vendors: [] } }
+    }
+    if (url === '/api/option/model_pricing') {
+      return {
+        data: {
+          success: true,
+          data: {
+            entries: taskModelNames.map((model_name) => ({
+              model_name,
+              usage_schema: { images: { type: 'number', unit: 'image' } },
+            })),
+            options: {},
+            empty_version: 'test-version',
+          },
+        },
+      }
     }
     return { data: { success: true, data: {} } }
   })
   const modelRatio = JSON.stringify({
     'gpt-4.1-mini': 0.2,
     'claude-sonnet': 1.5,
+    ...Object.fromEntries(taskModelNames.map((name) => [name, 1])),
   })
+  const taskBillingMode = JSON.stringify(
+    Object.fromEntries(taskModelNames.map((name) => [name, 'tiered_expr']))
+  )
+  const taskBillingExpr = JSON.stringify(
+    taskModelNames[0] ? { [taskModelNames[0]]: 'u("images")' } : {}
+  )
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
@@ -65,8 +106,8 @@ async function renderEditor() {
         savedImageRatio='{}'
         savedAudioRatio='{}'
         savedAudioCompletionRatio='{}'
-        savedBillingMode='{}'
-        savedBillingExpr='{}'
+        savedBillingMode={taskBillingMode}
+        savedBillingExpr={taskBillingExpr}
         modelPrice='{}'
         modelRatio={modelRatio}
         cacheRatio='{}'
@@ -75,19 +116,63 @@ async function renderEditor() {
         imageRatio='{}'
         audioRatio='{}'
         audioCompletionRatio='{}'
-        billingMode='{}'
-        billingExpr='{}'
+        billingMode={taskBillingMode}
+        billingExpr={taskBillingExpr}
         onChange={vi.fn()}
         onSave={vi.fn()}
         isSaving={false}
       />
     </QueryClientProvider>
   )
-  // The real page has pricing metadata loaded long before the user drags over
-  // a model name, so settle the pricing query before interacting.
   await waitFor(() => expect(queryClient.isFetching()).toBe(0))
   return view
 }
+
+it.each([false, true])(
+  'does not request the public pricing catalog from the admin editor (mobile=%s)',
+  async (isMobile) => {
+    await renderEditor(isMobile)
+    const row = await screen.findByRole('row', { name: /gpt-4\.1-mini/ })
+    fireEvent.click(within(row).getByText('gpt-4.1-mini'))
+    await screen.findByRole('region', { name: 'Edit model pricing' })
+
+    expect(api.get).not.toHaveBeenCalledWith('/api/pricing')
+  }
+)
+
+it('keeps task pricing badges and filtering when the public pricing catalog is disabled', async () => {
+  const user = userEvent.setup()
+  await renderEditor(false, ['task-configured', 'task-unconfigured'])
+
+  const configuredRow = await screen.findByRole('row', {
+    name: /task-configured/,
+  })
+  const unconfiguredRow = await screen.findByRole('row', {
+    name: /task-unconfigured/,
+  })
+  expect(within(configuredRow).getByText('Task pricing')).toBeVisible()
+  expect(
+    within(unconfiguredRow).getByText('Task pricing not configured')
+  ).toBeVisible()
+
+  const modeFilter = screen
+    .getAllByRole('button', { name: 'Mode' })
+    .find((button) => button.getAttribute('aria-haspopup') === 'dialog')
+  if (!modeFilter) throw new Error('Expected the Mode filter button')
+  await user.click(modeFilter)
+  await user.click(screen.getByText('Expression - Task pricing'))
+
+  expect(
+    await screen.findByRole('row', { name: /task-configured/ })
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole('row', { name: /task-unconfigured/ })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('row', { name: /gpt-4\.1-mini/ })
+  ).not.toBeInTheDocument()
+  expect(api.get).not.toHaveBeenCalledWith('/api/pricing')
+})
 
 // A drag-select ends with mousedown/mouseup inside the row and the browser
 // then fires `click` on the row. Only that final `click` is dispatched here so

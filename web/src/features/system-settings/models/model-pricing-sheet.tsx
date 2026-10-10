@@ -118,6 +118,7 @@ export type { ModelRatioData } from './model-pricing-core'
 type ModelPricingSheetProps = {
   open: boolean
   onOpenChange: (open: boolean) => void
+  loadPricingCatalog?: boolean
   editData?: ModelRatioData | null
   onSave?: () => void | Promise<void>
   isSaving?: boolean
@@ -132,6 +133,7 @@ type ModelPricingEditorPanelProps = Omit<
 > & {
   className?: string
   embedded?: boolean
+  // 管理端不请求可能关闭的公开价目目录；任务示例仅来自插件变体元数据。
   scrollHeader?: ReactNode
 }
 
@@ -148,6 +150,7 @@ export const ModelPricingSheet = forwardRef<
   {
     open,
     onOpenChange,
+    loadPricingCatalog = true,
     editData,
     onSave,
     isSaving,
@@ -174,6 +177,7 @@ export const ModelPricingSheet = forwardRef<
         <ModelPricingEditorPanel
           ref={ref}
           editData={editData}
+          loadPricingCatalog={loadPricingCatalog}
           usageSchema={usageSchema}
           pluginVariants={pluginVariants}
           onDirtyChange={onDirtyChange}
@@ -199,6 +203,7 @@ export const ModelPricingEditorPanel = forwardRef<
     pluginVariants,
     onDirtyChange,
     embedded = false,
+    loadPricingCatalog = true,
     scrollHeader,
   },
   ref
@@ -260,7 +265,7 @@ export const ModelPricingEditorPanel = forwardRef<
   const initialBillingExpr =
     editData?.billingExpr ||
     (initialPricingMode === 'tiered_expr' ? DEFAULT_TOKEN_BILLING_EXPR : '')
-  const { models: pricingModels } = usePricingData()
+  const { models: pricingModels } = usePricingData(loadPricingCatalog)
 
   const form = useForm<ModelPricingFormValues>({
     resolver: zodResolver(createModelPricingSchema(t)),
