@@ -1,0 +1,20 @@
+[Unit]
+Description=AI 平台 PostgreSQL 每日完整备份
+Requires=docker.service
+After=docker.service
+StartLimitIntervalSec=6h
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/data/backups/ai-platform/postgres
+ExecStart=/data/ai-platform/backup-postgres.sh
+TimeoutStartSec=1h
+Restart=on-failure
+RestartSec=5min

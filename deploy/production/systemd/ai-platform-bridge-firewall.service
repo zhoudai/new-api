@@ -1,0 +1,14 @@
+[Unit]
+Description=AI 平台 Bridge Docker 防火墙规则
+Requires=docker.service
+After=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/data/ai-platform/bridge-firewall.sh apply
+ExecStop=/data/ai-platform/bridge-firewall.sh remove
+
+[Install]
+WantedBy=multi-user.target

@@ -9,4 +9,11 @@ docs
 .gocache
 /web/node_modules
 /web/dist
+/data
+/logs
+/deploy/production
+/.project-workflow
+/bridge/certs
+**/.env*
+**/*.env
 !THIRD-PARTY-LICENSES.md

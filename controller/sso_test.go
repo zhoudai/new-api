@@ -67,7 +67,7 @@ func setupSSOControllerTest(t *testing.T) *model.User {
 func TestSSOAuthorizeAndTokenAreBoundAndSingleUse(t *testing.T) {
 	user := setupSSOControllerTest(t)
 	previousProjects := os.Getenv("AI_SSO_PROJECTS")
-	os.Setenv("AI_SSO_PROJECTS", "hedezhongcheng|local-sso-client-secret|platform-ops|http://127.0.0.1:5175/sso/callback")
+	os.Setenv("AI_SSO_PROJECTS", "hedezhongcheng|local-sso-client-secret|hdzc-shared|http://127.0.0.1:5175/sso/callback")
 	t.Cleanup(func() { _ = os.Setenv("AI_SSO_PROJECTS", previousProjects) })
 
 	authorizeResponse := httptest.NewRecorder()

@@ -1,0 +1,202 @@
+{
+  "schemaVersion": 1,
+  "project": "ai-platform",
+  "workflowStatus": "in_progress",
+  "currentPhase": "P08",
+  "target": {
+    "server": "<AI平台公网地址>",
+    "environment": "production",
+    "deploymentBoundary": "ai-platform 使用独立目录、Compose 项目、容器网络、数据卷和 PostgreSQL；不复用 HZC 应用配置或 MySQL 数据库",
+    "platformEntryCandidate": "https://ai.al-bei.cn（已确认：平台管理员与 HZC 商家共用网址；根路径跳转到 /sign-in）",
+    "bridgeEntryCandidate": "https://<BRIDGE_INTERNAL_FQDN>:3001（Docker 内网别名指向 <Bridge容器内网地址>；无公网 A/AAAA 记录；不发布宿主机端口）",
+    "dataDirectoryCandidate": "<AI平台数据目录>",
+    "backupDirectoryCandidate": "<AI平台备份目录>/postgres",
+    "initialBackupPolicy": {
+      "scope": "预上线验证阶段；真实支付和真实模型保持关闭",
+      "rpo": "不超过 24 小时",
+      "rto": "8 小时内",
+      "schedule": "每日 PostgreSQL 完整备份；发布或迁移前另做备份",
+      "retention": "保留最近 14 份每日备份",
+      "restoreValidation": "发布前在隔离 PostgreSQL 实例完成恢复验证",
+      "risk": "初期备份与平台位于同一服务器；服务器或数据盘故障可能同时影响主数据和备份。开放真实充值前必须增加异地备份并通过恢复验证。"
+    }
+  },
+  "phases": [
+    {
+      "id": "P00",
+      "name": "准入与目标冻结",
+      "status": "done",
+      "evidence": [
+        "用户确认部署到 HZC 生产服务器，两个项目保持独立",
+        "用户确认平台管理方与 HZC 商家共用 https://ai.al-bei.cn 登录网址；HZC 后端通过内部 Bridge 调用",
+        "2026-10-08 查询 <权威DNS服务器> 和 <权威DNS服务器>：ai.al-bei.cn 的 A 记录均为 <AI平台公网地址>",
+        "docs/部署与凭据说明.md：当前为本地 POC，不接真实支付或真实密钥",
+        "docker-compose.yml：当前 Compose 使用本地默认配置和端口",
+        "已登记预上线阶段的 RPO、RTO、本机独立备份目录、每日完整备份、14 份保留和隔离恢复要求；真实充值前必须增加异地备份"
+      ],
+      "blockedBy": [],
+      "nextAction": ""
+    },
+    {
+      "id": "P01",
+      "name": "服务器基础与公网入口",
+      "status": "done",
+      "evidence": [
+        "deploy/production/生产对照核验.md：2026-10-08 SSH 只读回读 Ubuntu 22.04.5、4 核、内存/磁盘、/data 独立挂载、Docker/Compose、Nginx、时间同步和 UFW",
+        "服务器上未发现 AI 平台目录或 3000/3001/5432/6379 监听；HZC 服务和数据库未修改或连接",
+        "HZC API 容器位于 <HZC_DOCKER_NETWORK> 网段 <HZC容器网段>，宿主 Docker 网关为 <内部IP>；DOCKER-USER 当前无规则"
+      ],
+      "blockedBy": [],
+      "nextAction": ""
+    },
+    {
+      "id": "P02",
+      "name": "DNS 与 HTTPS",
+      "status": "done",
+      "evidence": [
+        "2026-10-08 权威 DNS <权威DNS服务器> 和 <权威DNS服务器> 均返回 ai.al-bei.cn A <AI平台公网地址>；未回读到 AAAA/CNAME。",
+        "变更前公网 HTTP 返回 200 且没有跳转；HTTPS TLS 校验通过但 302 到 HZC 管理模式，服务器没有 AI 域名专属 Nginx 配置。",
+        "服务器 *.al-bei.cn 证书覆盖 ai.al-bei.cn，有效期至 2026-12-06 08:25:06 GMT；Certbot 3.3.0、dns-aliyun-next 插件、启用的 certbot.timer 和可执行 Nginx reload hook 均已回读。",
+        "2026-10-08 使用 <Certbot命令路径> renew --dry-run --non-interactive --cert-name al-bei.cn -q，续期模拟通过；未替换正式证书。",
+        "已新增并启用 deploy/production/nginx/ai-platform.conf 对应的独立 Nginx 站点；nginx -t 和 reload 通过，公网 HTTP 返回 301 到 HTTPS，HTTPS 返回预期 503 占位响应且 TLS 校验通过。真实应用健康检查留待 P07。",
+        "变更后 HZC 管理端仍返回 302 到 /?mode=admin，HZC API /health/ready 返回 200；本轮未修改 HZC Nginx 配置或连接 HZC 数据库。",
+        "回滚点：变更前 AI 站点文件和启用链接均不存在；若需回滚，只移除 <AI_NGINX站点配置> 和 <AI_NGINX站点配置>，再执行 nginx -t 与 systemctl reload nginx。"
+      ],
+      "blockedBy": [],
+      "nextAction": ""
+    },
+    {
+      "id": "P03",
+      "name": "代码与发布包门禁",
+      "status": "done",
+      "evidence": [
+        "deploy/production/production.env.example 仅含空白占位，不含默认生产秘密。",
+        "生产 Compose 默认服务与 hzc profile 均通过 docker compose config -q；New API 仅绑定 127.0.0.1:3000，PostgreSQL/Redis 无宿主机端口，Bridge 只加入 <AI_PLATFORM_DOCKER_NETWORK> 与既有 <HZC_DOCKER_NETWORK> 网络。",
+        "前端 bun run build 通过；Bridge go test ./bridge 通过；根模块后端使用固定 Go 1.26.1 工具链、离线模块缓存交叉编译为 linux/amd64，退出码 0。",
+        "AI 平台和 Bridge 镜像已按提交 92aa6a014a34 标记为 linux/amd64；PostgreSQL/Redis 与运行时基础镜像固定 digest。最终 New API 镜像在无 HZC 数据库、无端口发布的临时容器中使用 SQLite 启动并正常退出。",
+        "gitleaks 对 deploy/production、bridge 和 Docker 镜像归档扫描均为 0 条发现；镜像环境仅含 PATH，无 secret/password/token/credential/key 环境变量。",
+        "Docker 镜像归档已上传并加载；SHA-256 摘要未留存，当前记录无法复核传输一致性。",
+        "根 Dockerfile 的完整 BuildKit 构建在 go mod download 阶段两次无输出后手动中止；替代验证使用同版本固定 Go 工具链离线编译，并组装固定运行时镜像。",
+        "生产镜像归档已上传至服务器并加载；传输前后 SHA-256 摘要未留存，当前记录无法复核归档一致性。",
+        "服务器已 docker load New API 与 Bridge 的 92aa6a014a34 镜像标签，检查均为 linux/amd64；使用真实受控 env 文件对默认 Compose 和 hzc profile 执行 config -q 均通过。",
+        "生产 Compose 在 P03/P05 阶段默认服务与 hzc profile 均校验通过；New API 只映射 127.0.0.1:3000，PostgreSQL/Redis 无宿主机端口，Bridge 无公开端口。Redis AOF 数据也绑定到 <AI平台数据目录>/redis。"
+      ],
+      "blockedBy": [],
+      "nextAction": ""
+    },
+    {
+      "id": "P04",
+      "name": "生产秘密配置",
+      "status": "done",
+      "evidence": [
+        "服务器 <AI平台数据目录>/production.env 由服务器本地 openssl 生成 PostgreSQL、Redis 和会话随机秘密，文件权限为 600 root:root。",
+        "远端只回读文件元数据、变量名与非空状态；未读取、下载或输出任何秘密值。",
+        "TRUSTED_PROXIES 暂设为 none；Bridge 企业与项目凭证保留 NOT_CONFIGURED 占位，待 P08 平台初始化后建立 HZC 商家再替换；真实支付和模型凭据未设置。",
+        "服务器 Compose 使用该受控 env 文件校验默认服务和 hzc profile 均通过；此操作没有创建或启动容器。"
+      ],
+      "blockedBy": [],
+      "nextAction": ""
+    },
+    {
+      "id": "P05",
+      "name": "独立数据库与备份",
+      "status": "done",
+      "evidence": [
+        "服务器 PostgreSQL 15.19 与 Redis 8.10.1 容器使用固定 digest；均 healthy，PostgreSQL/Redis 数据分别持久化到 <AI平台数据目录>/postgres 与 <AI平台数据目录>/redis，未发布宿主机端口。",
+        "New API 数据目录与日志目录及 PostgreSQL/Redis 数据目录已分别创建在 /data 独立分区，并按容器 UID 设置权限；备份目录 <AI平台备份目录>/postgres 权限为 700 root:root。",
+        "每日备份脚本、systemd service/timer 已部署；systemd-analyze verify 通过（系统已有 snapd/cloudmonitor 告警与本服务无关）；timer enabled/active，手动运行 service 结果 success、退出码 0。",
+        "生成两个 892 字节的空库 PostgreSQL 自定义格式备份，SHA-256 sidecar 检查通过；保留策略最多保留 14 个备份。",
+        "将空库备份恢复到无网络、tmpfs 挂载的独立 PostgreSQL 15.19 容器；pg_restore 成功并通过 SELECT current_database() 校验，临时容器退出后自动清理。",
+        "只在 AI 平台自己的全新数据库上执行初始化和备份；HZC deploy-api-1 始终 Up，未连接或修改 HZC 数据库。真实充值前仍需服务器外备份，并在 New API schema/数据产生后复验恢复。",
+        "New API 自动迁移生成 40 张 public 表后，再创建 138035 字节数据库备份；校验并恢复到隔离 tmpfs PostgreSQL 15.19，恢复后 public 表数量与源库同为 40。这次结构恢复验证不包含后来创建的管理员记录；真实充值前仍需外部备份和恢复验证。"
+      ],
+      "blockedBy": [],
+      "nextAction": ""
+    },
+    {
+      "id": "P06",
+      "name": "充值与模型渠道",
+      "status": "pending",
+      "evidence": [],
+      "blockedBy": [],
+      "nextAction": "真实支付和上游模型调用继续关闭；待合法凭据通过安全渠道提供后再单独执行与验收。"
+    },
+    {
+      "id": "P07",
+      "name": "平台首次初始化与发布",
+      "status": "done",
+      "evidence": [
+        "仅启动 Compose 项目 ai-platform 的 New API；New API、PostgreSQL 15.19、Redis 8.10.1 均 healthy；New API 仅绑定宿主机 127.0.0.1:3000，PostgreSQL/Redis 无宿主机端口，Bridge profile 未启动。",
+        "生产 HTTPS 站点已从 503 占位切换到本机 New API 反向代理；可信代理仅配置 127.0.0.1 与 ai-platform 网络网关 <Docker网关地址>，Nginx 将 X-Forwarded-For 覆盖为真实连接地址。配置变更前占位文件已备份至 <AI平台备份目录>/nginx/ai-platform-placeholder.conf。",
+        "外网回读 ai.al-bei.cn HTTP 301 到 HTTPS、门户 HTTPS 200、/api/status 200 且证书验证成功；HZC admin.al-bei.cn 仍为 302、api.al-bei.cn/health/ready 为 200；本轮未修改 HZC Nginx 配置。",
+        "Nginx reload 后首个本机代理探测短暂返回 503，紧接着复测及外网门户/API 均为 200；Nginx 处于 active，三个 AI 服务均 healthy。",
+        "负责人已创建首个平台管理员；只读查询确认 root 管理员计数为 1。支付、上游模型和 Bridge 企业凭证均未启用。",
+        "AI 独立 Nginx 精确匹配 / 并 302 跳转 /sign-in；公网回读根路径 302 至 https://ai.al-bei.cn/sign-in，/sign-in 与 /api/status 均为 200。nginx -t 与 reload 通过；配置摘要未留存。",
+        "本次 AI Nginx 变更前配置备份为 <AI平台备份目录>/nginx/ai-platform-before-login-redirect-20261008T082408Z.conf。HZC 管理端/API 正常、deploy-api-1 运行，本轮未修改 HZC Nginx 配置或连接 HZC 数据库。"
+      ],
+      "blockedBy": [],
+      "nextAction": "P07 已完成，进入 P08：安全配置 HZC 商户和项目凭证，并按已验证的内网 HTTPS 入口验收共享余额。"
+    },
+    {
+      "id": "P08",
+      "name": "HZC 商家、Bridge 与共享余额验收",
+      "status": "in_progress",
+      "evidence": [
+        "较早一次只读请求本地 http://127.0.0.1:3000/api/status：register_enabled=false、password_register_enabled=false；当时线上 https://ai.al-bei.cn/api/status 两项均为 true。该记录是较早快照，不代表后续状态。",
+        "本地和线上 /sign-up 页面路由均返回 HTTP 200；本轮未提交注册请求。页面返回 200 仅代表前端路由可访问，是否允许新注册由上面的服务端设置决定。",
+        "本地与线上 Nginx 配置摘要未留存，当前记录无法复核文件内容一致性；服务器 nginx -t 通过；公网 / 返回 302 至 /sign-in。",
+        "本轮仅通过公开状态接口和 SSH 只读核对，没有更改线上选项，也未连接平台 PostgreSQL 或 HZC 生产数据库。",
+        "2026-10-08 后续只读回读中，线上 /api/status 的 register_enabled 与 password_register_enabled 均为 false；这是当前记录中的最近一次回读。2026-10-09 发布 TLS 后未重新核验；未提交注册请求或验证注册 API 的拒绝结果。",
+        "负责人确认商户账号所属用户组为 vip，并在该商户账号下创建启用的 API Key；截图显示令牌分组为 vip，密钥值未读取。",
+        "历史探针确认 HZC 容器访问服务器网卡 <AI平台服务器内网地址>:3001 超时；后续确定 Bridge 固定使用 <HZC_DOCKER_NETWORK> 网络地址 <Bridge容器内网地址>，并在本轮完成专用证书和 Docker 内网域名 HTTPS。",
+        "2026-10-08 为 <BRIDGE_INTERNAL_FQDN> 单独签发 Let’s Encrypt ECDSA 证书，有效期至 <证书有效期已核验>；未复用 AI 门户通配符私钥。权威 DNS 没有该域名 A/AAAA 记录，DNS-01 临时 TXT 已清理。",
+        "生产 Compose 已增加 <BRIDGE_INTERNAL_FQDN> 内网别名、只读证书挂载及独立 Bridge 镜像标签；从 HZC deploy-api-1 通过系统 CA 和主机名校验，TLS 1.2/1.3 下 readiness 均返回 200。临时探针已清理且无宿主机端口绑定。",
+        "Certbot 专用 Bridge 部署钩子已安装并验证；正式 Bridge 仍 inactive/disabled。线上项目 ID 和企业映射均为 NOT_CONFIGURED；本轮未读取或传递商户 Key；未改 HZC 配置、未访问 HZC 数据库、未进行扣费或真实模型调用。",
+        "部署前发现 Bridge 到 New API 的内网上游使用 HTTP，已登记为商户 Key 接入前的 P1 阻断项；本轮已按独立证书和 TLS 监听完成部署与验收。",
+        "2026-10-08 通过 HZC 项目的受控 SSH 配置连接生产服务器；密码只从本地权限 600 的凭据文件读取，未回显或记录。",
+        "为 <NEW_API_INTERNAL_FQDN> 使用 Certbot DNS-01 单独签发 ECDSA 证书；证书 SAN、系统 CA 信任链和公私钥配对通过，有效期至 2027-01-06 13:13:25 GMT。权威 DNS 的 A、AAAA、CNAME 均无记录，续期模拟通过，挑战 TXT 已清理。",
+        "使用固定 Go 1.26.1 工具链离线构建 linux/amd64 New API 镜像 ai-platform-new-api:tls-c69fcdd9cab1；生产镜像归档 SHA-256 摘要未留存，当前记录无法复核传输完整性。",
+        "重建仅限 ai-platform 的 new-api 服务；容器 healthy，HTTP 127.0.0.1:3000 与公网 AI 门户/API 均返回 200。<AI_PLATFORM_DOCKER_NETWORK> 临时探针通过 <NEW_API_INTERNAL_FQDN>:3001 的 TLS 1.2、TLS 1.3、证书链、主机名和 /api/status 校验；宿主机没有发布 3001。",
+        "Certbot 专用 New API 续期部署钩子已安装并通过 sh -n；钩子只处理 <NEW_API_INTERNAL_FQDN> lineage，并在续期时重启 New API。Certbot timer 未更改。",
+        "发布前备份 AI PostgreSQL 至 <AI平台备份目录>/postgres/pre-upstream-tls-20261008-c69fcdd9cab1.dump；原 Compose 与 production.env 备份至 <AI平台备份目录>/pre-upstream-tls-20261008-c69fcdd9cab1。生产环境文件比较确认只有 AI_PLATFORM_RELEASE 变化。",
+        "发布后 HZC API /health/ready 返回 200，管理入口返回 302，deploy-api-1 保持 running；未修改 HZC 配置、服务或数据库，也未启动正式 Bridge。",
+        "生产环境文件中的项目 ID 和企业映射均为 NOT_CONFIGURED；本轮未读取 Key 或验证线上项目凭证记录。正式 Bridge 仍 disabled/inactive，商户凭证与项目凭证须先核实后再进行业务验收。",
+        "2026-10-08 只读对照本地和线上集成配置：本地 Bridge 项目标识为 hedezhongcheng、企业映射标识为 platform-ops；生产 AI_BRIDGE_PROJECT_ID 和 AI_BRIDGE_ENTERPRISE_TOKENS 均为 NOT_CONFIGURED，Bridge 服务 disabled/inactive。",
+        "2026-10-08 HZC 生产受控配置和运行中的 deploy-api-1 容器都只有 AiPlatform__Enabled=false；AiPlatform__ProjectKey 未注入。AI 门户 /api/status 与 HZC /health/ready 均返回 200。",
+        "2026-10-08 商户 API Key 页面仅显示遮挡值；本地 POC Key 与页面可见 Key 标识不匹配。未读取或输出完整 Key；Chrome 当前为商户账号，未通过管理员接口确认线上项目凭证。未修改生产配置、未重启 HZC、未访问 HZC 数据库、未调用模型或扣费。",
+        "2026-10-09 使用已打开的管理员浏览器会话确认：签发操作前 `hedezhongcheng` 无项目凭证记录；随后创建并轮换到第 2 版项目凭证，凭证值未显示。仅将其写入 HZC 服务器 `<HZC配置目录>/production.env`；从服务器调用项目凭证校验接口返回 HTTP 204。",
+        "配置前将 AI 平台 production.env、Bridge Compose、HZC production.env 与 Bridge systemd 单元备份到 `<AI平台备份目录>/hzc-bridge-20261009T031407Z`，备份文件权限为 0600。",
+        "服务器回读确认 `AiPlatform__Enabled=false` 且项目凭证已配置；未重启 HZC，因此运行中的容器尚未注入该凭证。Bridge systemd 仍 disabled/inactive；未启动 Bridge、调用模型或执行扣费。",
+        "生产 Bridge 配置中没有可核验的商户 New API Key；本地 POC Key 与商户 Key 不匹配，未使用。未配置企业映射，等待从受控服务器 Secret 来源取得正确 Key。",
+        "2026-10-09 按负责人确认，将 HZC A-02 固定企业标识由 `platform-ops` 改为 `hdzc-shared`，招聘企业各自标识保持独立。生产 `<HZC配置目录>/production.env` 在备份到 `<AI平台备份目录>/hzc-enterprise-id-20261009T041551Z/hzc.production.env` 后更新；脱敏回读确认 EnterpriseId 为 `hdzc-shared`、Enabled 为 false，文件权限为 640。未重启 HZC，运行中的 `deploy-api-1` 尚未加载新配置。",
+        "2026-10-09：生产 Bridge Secret 文件脱敏核验确认项目 ID 与 hdzc-shared 唯一映射，权限 0600 root:root；现网 Compose 校验通过，Bridge systemd enabled/active、容器运行，内网 HTTPS readiness 返回 200。使用 HZC 服务端项目凭证通过 Bridge 发起只读 GET /v1/models，HTTP 200 且响应有效；未读取或显示密钥，HZC AI 保持关闭，未重启 HZC、未发起模型推理或扣费。",
+        "2026-10-09：生产 Bridge 命名统一为标准 profile `hdzc`，旧 `hzc` profile 保留兼容；systemd 启停命令使用 `hdzc`，Compose 网络键为 `hdzc-internal`，外部 Docker 网络 `<HZC_DOCKER_NETWORK>`、地址和端口不变。两个 profile 配置校验通过；Bridge 重启后 active，内网 HTTPS readiness HTTP 200。备份位于 `<AI平台备份目录>/hdzc-profile-20261009T045804Z-870254`。HZC AI 仍关闭，HZC 容器未重启；未调用模型推理或扣费。"
+      ],
+      "blockedBy": [
+        "HZC AI 开关按当前范围保持 false，运行中的 HZC 容器尚未加载新项目凭证；业务级共享余额验收待负责人另行授权。",
+        "P08 防火墙 systemd 单元尚未安装；生产放行/拒绝规则和 Docker 重启后的规则恢复尚未验证。",
+        "New API TLS 证书源目录已在本地候选中移出可写数据目录；生产证书迁移、Compose/Certbot 更新及 readiness 验证尚未执行。",
+        "DeepSeek 通道和价目尚未核实；内置价格来源曾返回 401，官方机器可读价格源与节假日计费规则未确认；价格编辑器修复仅在本地，尚未部署。",
+        "真实支付、模型推理与扣费验收仍按 P06/P09 独立门禁处理。"
+      ],
+      "nextAction": "先迁移 New API TLS 证书到独立目录并验证 Compose、Certbot 钩子和 readiness；再安装并验证 Bridge 防火墙 systemd 单元及 Docker 重启后的规则恢复；随后确认 DeepSeek 官方机器可读价格源和节假日计费规则，并在发布价格编辑器修复后核验通道与价目。保持 HZC AI 关闭；只有负责人另行授权后才加载最新项目凭证并验收共享余额业务。真实支付、模型推理和扣费按 P06/P09 独立门禁处理。"
+    },
+    {
+      "id": "P09",
+      "name": "回滚与部署收口",
+      "status": "pending",
+      "evidence": [],
+      "blockedBy": [],
+      "nextAction": ""
+    }
+  ],
+  "nextAction": "先迁移 New API TLS 证书到独立目录并验证 Compose、Certbot 钩子和 readiness；再安装并验证 Bridge 防火墙 systemd 单元及 Docker 重启后的规则恢复；随后确认 DeepSeek 官方机器可读价格源和节假日计费规则，并在发布价格编辑器修复后核验通道与价目。保持 HZC AI 关闭；只有负责人另行授权后才加载最新项目凭证并验收共享余额业务。真实支付、模型推理和扣费按 P06/P09 独立门禁处理。",
+  "secretPolicy": {
+    "valuesStored": false,
+    "rule": "状态账本仅记录配置来源和脱敏证据，不写入密码、Token、Secret 或连接串。"
+  },
+  "rollback": {
+    "requiredBeforeMutation": true,
+    "scope": "后续仅允许回滚 ai-platform 自己的 Compose 项目、反向代理独立配置及 <AI平台数据目录> 数据；不得停止、覆盖或清理 HZC 服务或数据。"
+  }
+}

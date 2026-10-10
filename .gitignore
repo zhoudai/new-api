@@ -39,6 +39,18 @@ electron/dist
 token_estimator_test.go
 skills-lock.json
 .playwright-mcp
+.project-workflow/.task-checkpoint.json
+__pycache__/
+*.pyc
+
+# 忽略环境变量文件，同时保留可提交的模板。
+*.env
+.env.*
+!.env.*.example
+!*.env.example
+
+# 忽略本地 Bridge TLS 证书和私钥。
+bridge/certs/
 
 # Local-only live probes and scratch test workspaces.
 .local-tests/

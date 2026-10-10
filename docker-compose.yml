@@ -30,12 +30,16 @@ services:
       - AI_BRIDGE_PROJECT_KEY=${AI_BRIDGE_PROJECT_KEY:-}
       - AI_BRIDGE_CREDENTIAL_VERIFY_URL=${AI_BRIDGE_CREDENTIAL_VERIFY_URL:-}
       - AI_BRIDGE_ENTERPRISE_TOKENS=${AI_BRIDGE_ENTERPRISE_TOKENS:-}
+      - AI_BRIDGE_TLS_CERT_FILE=/run/bridge-tls/fullchain.pem
+      - AI_BRIDGE_TLS_KEY_FILE=/run/bridge-tls/privkey.pem
+    volumes:
+      - ${AI_BRIDGE_TLS_CERT_HOST_DIR:-./bridge/certs/hedezhongcheng}:/run/bridge-tls:ro
     depends_on:
       - new-api
     networks:
       - new-api-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:3001/health/ready | grep -q 'ready' || exit 1"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://localhost:3001/health/ready | grep -q 'ready' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -56,12 +60,16 @@ services:
       - AI_BRIDGE_PROJECT_KEY=${EDU_TRAINING_BRIDGE_PROJECT_KEY:-}
       - AI_BRIDGE_CREDENTIAL_VERIFY_URL=${EDU_TRAINING_BRIDGE_CREDENTIAL_VERIFY_URL:-}
       - AI_BRIDGE_ENTERPRISE_TOKENS=${EDU_TRAINING_BRIDGE_ENTERPRISE_TOKENS:-}
+      - AI_BRIDGE_TLS_CERT_FILE=/run/bridge-tls/fullchain.pem
+      - AI_BRIDGE_TLS_KEY_FILE=/run/bridge-tls/privkey.pem
+    volumes:
+      - ${EDU_TRAINING_BRIDGE_TLS_CERT_HOST_DIR:-./bridge/certs/edu-training}:/run/bridge-tls:ro
     depends_on:
       - new-api
     networks:
       - new-api-network
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://localhost:3001/health/ready | grep -q 'ready' || exit 1"]
+      test: ["CMD-SHELL", "wget --no-check-certificate -q -O - https://localhost:3001/health/ready | grep -q 'ready' || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

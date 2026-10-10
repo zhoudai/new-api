@@ -1,0 +1,11 @@
+[Unit]
+Description=每天运行 AI 平台 PostgreSQL 完整备份
+
+[Timer]
+OnCalendar=*-*-* 04:30:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=ai-platform-backup.service
+
+[Install]
+WantedBy=timers.target

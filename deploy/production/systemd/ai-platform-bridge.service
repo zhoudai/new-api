@@ -1,0 +1,15 @@
+[Unit]
+Description=AI 平台 Bridge（仅供 HZC Docker 网络访问）
+Requires=docker.service ai-platform-bridge-firewall.service
+After=docker.service ai-platform-bridge-firewall.service
+PartOf=docker.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=5s
+ExecStart=/usr/bin/docker compose --project-name ai-platform --env-file /data/ai-platform/production.env --file /data/ai-platform/bridge-compose.yml --profile hdzc up --no-deps --exit-code-from bridge bridge
+ExecStop=/usr/bin/docker compose --project-name ai-platform --env-file /data/ai-platform/production.env --file /data/ai-platform/bridge-compose.yml --profile hdzc stop --timeout 30 bridge
+
+[Install]
+WantedBy=multi-user.target

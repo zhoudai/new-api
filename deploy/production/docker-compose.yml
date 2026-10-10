@@ -1,0 +1,144 @@
+services:
+  postgres:
+    image: postgres@sha256:c961aa287d8698297cb26cdfadfbe9fd2cbaf77e53cfffe9636e8d8a1e4d842c
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?required}
+      POSTGRES_USER: ${POSTGRES_USER:?required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - type: bind
+        source: /data/ai-platform/postgres
+        target: /var/lib/postgresql/data
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - ai-platform
+
+  redis:
+    image: redis@sha256:298e5b3bc566bade82f46ad5511777a4a07a294097ce16ada2f6a42be5239df5
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?required}
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:?required}"]
+    # AOF 数据必须落在 AI 平台独立数据盘上。
+    volumes:
+      - type: bind
+        source: /data/ai-platform/redis
+        target: /data
+        bind:
+          create_host_path: false
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - ai-platform
+
+  new-api:
+    image: ai-platform-new-api:${AI_PLATFORM_RELEASE:?required}
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      SQL_DSN: postgresql://${POSTGRES_USER:?required}:${POSTGRES_PASSWORD:?required}@postgres:5432/${POSTGRES_DB:?required}
+      REDIS_CONN_STRING: redis://:${REDIS_PASSWORD:?required}@redis:6379
+      SESSION_SECRET: ${SESSION_SECRET:?required}
+      SESSION_COOKIE_SECURE: "true"
+      SESSION_COOKIE_TRUSTED_URL: https://ai.al-bei.cn
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:?required}
+      AI_PLATFORM_INTERNAL_TLS_LISTEN_ADDR: :3001
+      AI_PLATFORM_INTERNAL_TLS_CERT_FILE: /run/ai-platform/new-api-tls/fullchain.pem
+      AI_PLATFORM_INTERNAL_TLS_KEY_FILE: /run/ai-platform/new-api-tls/privkey.pem
+      TZ: Asia/Shanghai
+    ports:
+      - 127.0.0.1:3000:3000
+    volumes:
+      - type: bind
+        source: /data/ai-platform/new-api
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/ai-platform/logs
+        target: /data/logs
+        bind:
+          create_host_path: false
+      - type: bind
+        source: /data/ai-platform/new-api-tls
+        target: /run/ai-platform/new-api-tls
+        read_only: true
+        bind:
+          create_host_path: false
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O - http://127.0.0.1:3000/api/status |
+          grep -Eq '"success":[[:space:]]*true'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      ai-platform:
+        aliases:
+          - new-api.al-bei.cn
+
+  bridge:
+    image: ai-platform-bridge:${AI_BRIDGE_RELEASE:?required}
+    platform: linux/amd64
+    profiles:
+      - hdzc
+      # 保留旧 profile 作为兼容入口；新部署统一使用 hdzc。
+      - hzc
+    # 固定加入 HZC 容器所在网络；不发布宿主机端口，避免外部直接访问。
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      new-api:
+        condition: service_healthy
+    environment:
+      # 仅监听 HZC 网络地址；若固定 IP 不在容器内，Bridge 会启动失败并保持不可达。
+      AI_BRIDGE_LISTEN_ADDR: 172.30.250.3:3001
+      AI_BRIDGE_TLS_CERT_FILE: /run/ai-platform/tls/fullchain.pem
+      AI_BRIDGE_TLS_KEY_FILE: /run/ai-platform/tls/privkey.pem
+      AI_BRIDGE_UPSTREAM_BASE_URL: https://new-api.al-bei.cn:3001
+      AI_BRIDGE_PROJECT_ID: ${AI_BRIDGE_PROJECT_ID:?required}
+      AI_BRIDGE_CREDENTIAL_VERIFY_URL: https://new-api.al-bei.cn:3001/api/project-credentials/verify
+      AI_BRIDGE_ENTERPRISE_TOKENS: ${AI_BRIDGE_ENTERPRISE_TOKENS:?required}
+    volumes:
+      - type: bind
+        source: /data/ai-platform/bridge/tls
+        target: /run/ai-platform/tls
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      hdzc-internal:
+        ipv4_address: 172.30.250.3
+        aliases:
+          - ai-platform-bridge
+          - bridge.al-bei.cn
+      ai-platform: {}
+
+networks:
+  ai-platform:
+    name: ai-platform-internal
+  hdzc-internal:
+    name: deploy_internal
+    external: true
