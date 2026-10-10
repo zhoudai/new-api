@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"embed"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -215,12 +217,24 @@ func main() {
 		Addr:    ":" + port,
 		Handler: server,
 	}
+	internalTLSServer, err := newInternalTLSServer(server, os.Getenv)
+	if err != nil {
+		common.FatalLog("failed to configure internal HTTPS listener: " + err.Error())
+		return
+	}
 
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			common.FatalLog("failed to start HTTP server: " + err.Error())
 		}
 	}()
+	if internalTLSServer != nil {
+		go func() {
+			if err := internalTLSServer.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				common.FatalLog("failed to start internal HTTPS server: " + err.Error())
+			}
+		}()
+	}
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -235,14 +249,59 @@ func main() {
 	shutdownTimeout := time.Duration(common.GetEnvOrDefault("SHUTDOWN_TIMEOUT_SECONDS", 120)) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
-	}
+	shutdownHTTPServers(ctx, srv, internalTLSServer)
 	// 内存中的看板数据保存入库，避免重启丢失未落库数据 (issue #5679)
 	if common.DataExportEnabled {
 		model.SaveQuotaDataCache()
 	}
 	common.SysLog("server exited")
+}
+
+func newInternalTLSServer(handler http.Handler, getenv func(string) string) (*http.Server, error) {
+	listenAddr := getenv("AI_PLATFORM_INTERNAL_TLS_LISTEN_ADDR")
+	certFile := getenv("AI_PLATFORM_INTERNAL_TLS_CERT_FILE")
+	keyFile := getenv("AI_PLATFORM_INTERNAL_TLS_KEY_FILE")
+	if listenAddr == "" && certFile == "" && keyFile == "" {
+		return nil, nil
+	}
+	if certFile == "" || keyFile == "" {
+		return nil, errors.New("AI_PLATFORM_INTERNAL_TLS_CERT_FILE 和 AI_PLATFORM_INTERNAL_TLS_KEY_FILE 必须同时配置")
+	}
+	certificate, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
+		return nil, fmt.Errorf("内部 HTTPS 证书或私钥无法加载: %w", err)
+	}
+	if listenAddr == "" {
+		listenAddr = ":3001"
+	}
+	return &http.Server{
+		Addr:    listenAddr,
+		Handler: handler,
+		// 限制请求头读取和连接空闲时间，避免慢连接长期占用资源。
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		TLSConfig: &tls.Config{
+			MinVersion:   tls.VersionTLS12,
+			Certificates: []tls.Certificate{certificate},
+		},
+	}, nil
+}
+
+func shutdownHTTPServers(ctx context.Context, server, internalTLSServer *http.Server) {
+	var shutdowns sync.WaitGroup
+	shutdowns.Go(func() {
+		if err := server.Shutdown(ctx); err != nil {
+			common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
+		}
+	})
+	if internalTLSServer != nil {
+		shutdowns.Go(func() {
+			if err := internalTLSServer.Shutdown(ctx); err != nil {
+				common.SysError(fmt.Sprintf("internal HTTPS server forced to shutdown: %v", err))
+			}
+		})
+	}
+	shutdowns.Wait()
 }
 
 func InjectUmamiAnalytics() {

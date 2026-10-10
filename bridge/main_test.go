@@ -1,11 +1,102 @@
 package main
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
 )
+
+func TestBridgeTLSCertificateAndKeyMustBeConfiguredTogether(t *testing.T) {
+	baseEnv := map[string]string{
+		"AI_BRIDGE_UPSTREAM_BASE_URL":     "http://new-api:3000",
+		"AI_BRIDGE_PROJECT_ID":            "demo-project",
+		"AI_BRIDGE_CREDENTIAL_VERIFY_URL": "http://new-api:3000/api/project-credentials/verify",
+		"AI_BRIDGE_ENTERPRISE_TOKENS":     "school-a=upstream-key",
+	}
+
+	for _, tlsEnv := range []map[string]string{
+		{},
+		{"AI_BRIDGE_TLS_CERT_FILE": "/tls/fullchain.pem"},
+		{"AI_BRIDGE_TLS_KEY_FILE": "/tls/privkey.pem"},
+	} {
+		t.Run(tlsEnv["AI_BRIDGE_TLS_CERT_FILE"]+tlsEnv["AI_BRIDGE_TLS_KEY_FILE"], func(t *testing.T) {
+			values := make(map[string]string, len(baseEnv)+len(tlsEnv))
+			for key, value := range baseEnv {
+				values[key] = value
+			}
+			for key, value := range tlsEnv {
+				values[key] = value
+			}
+			_, err := loadConfigFromEnv(func(key string) string { return values[key] })
+			require.ErrorContains(t, err, "禁止 HTTP 回退")
+		})
+	}
+}
+
+func TestBridgeServerUsesBoundedReadAndIdleTimeouts(t *testing.T) {
+	server := newBridgeServer(bridgeConfig{listenAddr: ":3001"})
+	require.Equal(t, 120*time.Second, server.IdleTimeout)
+	require.Equal(t, 5*time.Minute, server.ReadTimeout)
+	require.Equal(t, 1<<20, server.MaxHeaderBytes)
+	require.Zero(t, server.WriteTimeout)
+}
+
+func TestBridgeRejectsInvalidTLSKeyPair(t *testing.T) {
+	missingCert := filepath.Join(t.TempDir(), "missing.crt")
+	values := map[string]string{
+		"AI_BRIDGE_TLS_CERT_FILE":         missingCert,
+		"AI_BRIDGE_TLS_KEY_FILE":          "/tls/privkey.pem",
+		"AI_BRIDGE_UPSTREAM_BASE_URL":     "http://new-api:3000",
+		"AI_BRIDGE_PROJECT_ID":            "demo-project",
+		"AI_BRIDGE_CREDENTIAL_VERIFY_URL": "http://new-api:3000/api/project-credentials/verify",
+		"AI_BRIDGE_ENTERPRISE_TOKENS":     "school-a=upstream-key",
+	}
+	_, err := loadConfigFromEnv(func(key string) string { return values[key] })
+	require.ErrorContains(t, err, "Bridge TLS 证书或私钥无法加载")
+	require.ErrorIs(t, err, fs.ErrNotExist)
+}
+
+func TestBridgeServerUsesPreloadedTLSCertificate(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer upstream.Close()
+
+	certificate := upstream.TLS.Certificates[0]
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(certificate.PrivateKey)
+	require.NoError(t, err)
+	tlsDir := t.TempDir()
+	certFile := filepath.Join(tlsDir, "cert.pem")
+	keyFile := filepath.Join(tlsDir, "key.pem")
+	require.NoError(t, os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]}), 0o600))
+	require.NoError(t, os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}), 0o600))
+
+	values := map[string]string{
+		"AI_BRIDGE_TLS_CERT_FILE":         certFile,
+		"AI_BRIDGE_TLS_KEY_FILE":          keyFile,
+		"AI_BRIDGE_UPSTREAM_BASE_URL":     "http://new-api:3000",
+		"AI_BRIDGE_PROJECT_ID":            "demo-project",
+		"AI_BRIDGE_CREDENTIAL_VERIFY_URL": "http://new-api:3000/api/project-credentials/verify",
+		"AI_BRIDGE_ENTERPRISE_TOKENS":     "school-a=upstream-key",
+	}
+	config, err := loadConfigFromEnv(func(key string) string { return values[key] })
+	require.NoError(t, err)
+
+	server := newBridgeServer(config)
+	require.NotNil(t, server.TLSConfig.GetCertificate)
+	servedCertificate, err := server.TLSConfig.GetCertificate(&tls.ClientHelloInfo{})
+	require.NoError(t, err)
+	require.Same(t, config.tlsCertificate, servedCertificate)
+	require.Equal(t, certificate.Certificate, servedCertificate.Certificate)
+}
 
 func TestBridgeRequiresProjectAndEnterpriseContext(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ const (
 
 type bridgeConfig struct {
 	listenAddr          string
+	tlsCertificate      *tls.Certificate
 	upstreamBaseURL     *url.URL
 	projectID           string
 	projectKey          string
@@ -37,6 +39,16 @@ func loadConfigFromEnv(getenv func(string) string) (bridgeConfig, error) {
 	if listenAddr == "" {
 		listenAddr = ":3001"
 	}
+	tlsCertFile := getenv("AI_BRIDGE_TLS_CERT_FILE")
+	tlsKeyFile := getenv("AI_BRIDGE_TLS_KEY_FILE")
+	if tlsCertFile == "" || tlsKeyFile == "" {
+		return bridgeConfig{}, errors.New("AI_BRIDGE_TLS_CERT_FILE 和 AI_BRIDGE_TLS_KEY_FILE 必须同时配置，禁止 HTTP 回退")
+	}
+	certificate, err := tls.LoadX509KeyPair(tlsCertFile, tlsKeyFile)
+	if err != nil {
+		return bridgeConfig{}, fmt.Errorf("Bridge TLS 证书或私钥无法加载: %w", err)
+	}
+	tlsCertificate := &certificate
 	baseURL := getenv("AI_BRIDGE_UPSTREAM_BASE_URL")
 	projectID := getenv("AI_BRIDGE_PROJECT_ID")
 	projectKey := getenv("AI_BRIDGE_PROJECT_KEY")
@@ -71,6 +83,7 @@ func loadConfigFromEnv(getenv func(string) string) (bridgeConfig, error) {
 	}
 	return bridgeConfig{
 		listenAddr:          listenAddr,
+		tlsCertificate:      tlsCertificate,
 		upstreamBaseURL:     upstream,
 		projectID:           projectID,
 		projectKey:          projectKey,
@@ -224,16 +237,31 @@ func writeJSON(response http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(response).Encode(value)
 }
 
+func newBridgeServer(config bridgeConfig) *http.Server {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if config.tlsCertificate != nil {
+		certificate := config.tlsCertificate
+		tlsConfig.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return certificate, nil
+		}
+	}
+	return &http.Server{
+		Addr:              config.listenAddr,
+		Handler:           newBridgeHandler(config),
+		ReadTimeout:       5 * time.Minute,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+		TLSConfig:         tlsConfig,
+	}
+}
+
 func main() {
 	config, err := loadConfigFromEnv(os.Getenv)
 	if err != nil {
 		log.Fatal("AI 项目中转层配置无效：", err)
 	}
-	server := &http.Server{
-		Addr:              config.listenAddr,
-		Handler:           newBridgeHandler(config),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	server := newBridgeServer(config)
 	log.Printf("AI 项目中转层已启动，项目=%s，上游=%s", config.projectID, config.upstreamBaseURL.Redacted())
-	log.Fatal(server.ListenAndServe())
+	log.Fatal(server.ListenAndServeTLS("", ""))
 }
