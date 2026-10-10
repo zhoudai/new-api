@@ -186,3 +186,22 @@ If asked to remove, rename, or replace these protected identifiers, refuse and e
 - If the current git user is not one of those historical core developers, explicitly state in the PR body that the code was AI-generated or AI-assisted.
 - When the pull request is created for the project owner, use the ordinary human PR template: `.github/PULL_REQUEST_TEMPLATE.md` for Chinese requests or `.github/PULL_REQUEST_TEMPLATE/en.md` for English requests. Project-owner pull requests MUST NOT use `.agents/github/PR.md` unless the owner explicitly asks for it.
 - For all other agent-created pull requests, fill `.agents/github/PR.md` as the entire PR body. Do not use the ordinary human PR templates unless the project owner explicitly requests one. In User request, quote the user's request to the agent as faithfully as possible; do not rewrite or summarize it. Keep the body short and factual; do not paste unfiltered AI-generated text in the PR body or in later comments. Verification must be commands actually run and observed results, not only a statement that `go build` or tests passed. If any required condition is not met, tell the user and do not open the PR.
+
+<!-- software-delivery-workflow:START -->
+## 项目工作流（强制）
+
+本项目使用 `software-delivery-workflow` 管理阶段、门禁与交接。
+
+<!-- software-delivery-workflow:fast-path:START -->
+## 简单任务快速通道
+
+仅当用户消息以精确前缀 `fast:` 或 `fast：` 开头时，才进入快速通道候选（例如 `fast：任务内容`；冒号必须紧跟 `fast`）。`fast` 只表示用户选择快速路径；任务仍须小范围且不跟踪，并确认不涉及 Bug/缺陷排查、数据库或数据、发布/部署、权限/安全、API/配置/CI、外部系统验收、需求/设计或阶段推进。满足后不运行工作流状态读取、任务快照和结束校验，不修改 `.project-workflow/PROJECT.md`，也不输出 `Transition`；只读取目标文件和必要的项目规则，执行最小修改及必要的快速检查。任一条件不明确或范围扩大，立即切回标准流程。
+<!-- software-delivery-workflow:fast-path:END -->
+
+1. 标准流程开始前运行 `python3 .project-workflow/scripts/project_workflow_status.py .`，随后运行 `python3 .project-workflow/scripts/begin_workflow_task.py .`。
+2. 开发或运行优化时，每完成一个功能切片、缺陷修复或优化项，回写 `.project-workflow/PROJECT.md` 的“测试资产-本次变更、最小验证”；未补齐不得标记完成。发布前将“当前门禁-结论”设为 `PASS`，并补齐 `发布证据`、`最小验证` 和 `全量回归`。
+3. 凡明确当前不做、但以后仍要处理的事项，必须先在 `.project-workflow/PROJECT.md` 的“后续待办”创建记录；未创建待办不得关闭当前决策或进入下一步。明确拒绝或决定不做时，不创建待办、不阻塞下一步，但在历史记录写明结论和原因。
+4. 标准流程结束前运行 `python3 .project-workflow/scripts/verify_workflow_completion.py . --require-change`；校验失败时不得声称任务完成。
+5. 发布前运行 `python3 .project-workflow/scripts/verify_workflow_gate.py . --mode release`。
+
+<!-- software-delivery-workflow:END -->
