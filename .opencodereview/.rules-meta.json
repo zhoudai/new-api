@@ -1,0 +1,47 @@
+{
+  "fingerprint": "3b9497f68332aa95",
+  "generated_at": "2026-10-09T16:35:37+08:00",
+  "stacks": [
+    "postgres",
+    "mysql",
+    "go",
+    "react",
+    "node-backend",
+    "stripe",
+    "typescript",
+    "security-web-next",
+    "security-baseline"
+  ],
+  "skills": [
+    "mysql",
+    "nodejs-backend-patterns",
+    "postgres-pro",
+    "postgresql-code-review",
+    "postgresql-optimization",
+    "security-best-practices#golang-general-backend-security.md",
+    "security-best-practices#javascript-typescript-nextjs-web-server-security.md",
+    "security-principles",
+    "stripe-best-practices",
+    "typescript-conventions",
+    "vercel-composition-patterns",
+    "vercel-react-best-practices"
+  ],
+  "budget": 48000,
+  "truncated": [
+    "vercel-react-best-practices @ **/*.tsx",
+    "vercel-composition-patterns @ **/*.tsx",
+    "security-best-practices#javascript-typescript-nextjs-web-server-security.md @ **/*.tsx",
+    "vercel-react-best-practices @ **/*.jsx",
+    "vercel-composition-patterns @ **/*.jsx",
+    "security-best-practices#javascript-typescript-nextjs-web-server-security.md @ **/*.jsx",
+    "vercel-react-best-practices @ **/*.ts",
+    "vercel-composition-patterns @ **/*.ts",
+    "nodejs-backend-patterns @ **/*.ts",
+    "security-best-practices#javascript-typescript-nextjs-web-server-security.md @ **/*.ts",
+    "vercel-react-best-practices @ **/*.js",
+    "vercel-composition-patterns @ **/*.js",
+    "nodejs-backend-patterns @ **/*.js",
+    "security-best-practices#javascript-typescript-nextjs-web-server-security.md @ **/*.js"
+  ],
+  "skipped": []
+}
