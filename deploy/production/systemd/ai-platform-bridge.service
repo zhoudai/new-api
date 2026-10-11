@@ -1,5 +1,5 @@
 [Unit]
-Description=AI 平台 Bridge（仅供 HZC Docker 网络访问）
+Description=AI 平台 Bridge（仅供 HDZC Docker 网络访问）
 Requires=docker.service ai-platform-bridge-firewall.service
 After=docker.service ai-platform-bridge-firewall.service
 PartOf=docker.service

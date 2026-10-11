@@ -122,8 +122,8 @@ class BridgeDeploymentConfigTest(unittest.TestCase):
         self.assertIn("Requires=docker.service ai-platform-bridge-firewall.service", unit)
         self.assertIn("After=docker.service ai-platform-bridge-firewall.service", unit)
         self.assertIn("PartOf=docker.service", unit)
-        self.assertIn("先安装并启用 Bridge 防火墙 systemd 单元", checklist)
-        self.assertIn("再安装或启用硬依赖该单元的 Bridge systemd 服务", checklist)
+        self.assertIn("防火墙单元已启用", checklist)
+        self.assertIn("Bridge systemd 服务硬依赖该单元", checklist)
 
     def test_bridge_recovery_docs_use_systemd_restart_and_readiness(self) -> None:
         guide = (ROOT / "docs/部署与凭据说明.md").read_text(encoding="utf-8")
@@ -139,10 +139,15 @@ class BridgeDeploymentConfigTest(unittest.TestCase):
         p08 = next(item for item in status["phases"] if item["id"] == "P08")
         blockers = "\n".join(p08["blockedBy"])
 
-        self.assertIn("防火墙 systemd 单元尚未安装", blockers)
-        self.assertIn("生产证书迁移、Compose/Certbot 更新及 readiness 验证尚未执行", blockers)
-        self.assertIn("官方机器可读价格源与节假日计费规则未确认", blockers)
-        self.assertIn("价格编辑器修复仅在本地，尚未部署", blockers)
+        self.assertNotIn("防火墙 systemd 单元尚未安装", blockers)
+        self.assertNotIn("生产证书迁移、Compose/Certbot 更新及 readiness 验证尚未执行", blockers)
+        self.assertTrue(any("2026-10-10" in item and "New API TLS 证书源已迁至" in item for item in p08["evidence"]))
+        self.assertTrue(any("2026-10-10" in item and "Bridge 防火墙与 Bridge systemd 单元已安装" in item for item in p08["evidence"]))
+        self.assertNotIn("官方机器可读价格源与节假日计费规则未确认", blockers)
+        self.assertNotIn("价格编辑器修复仅在本地，尚未部署", blockers)
+        self.assertTrue(any("deepseek-v4-flash 编辑表单及预览正常" in item for item in p08["evidence"]))
+        self.assertTrue(any("官方机器可读价目接口" in item and "人工对照官方页面复核" in item for item in p08["evidence"]))
+        self.assertIn("HDZC 真实推理与共享余额业务仍需独立验收", blockers)
 
     def test_p05_checklist_separates_completed_evidence_from_unpublished_backup_hardening(self) -> None:
         checklist = (ROOT / "deploy/production/生产部署执行清单.md").read_text(encoding="utf-8")
@@ -167,7 +172,9 @@ class BridgeDeploymentConfigTest(unittest.TestCase):
         self.assertIsNotNone(tls_mount)
         self.assertFalse(tls_mount.group(1).startswith(f"{data_mount.group(1)}/"))
         self.assertIn(f"target={tls_mount.group(1)}", cert_hook)
-        self.assertIn("先迁移 TLS 证书到独立目录并确认只读挂载与 Certbot 钩子一致", checklist)
+        self.assertIn("New API TLS 证书已迁移到可写数据挂载之外的独立目录", checklist)
+        guide = (ROOT / "docs/部署与凭据说明.md").read_text(encoding="utf-8")
+        self.assertIn("迁移后 Certbot 3.3.0 续期模拟成功", guide)
 
     def test_backup_cleanup_runs_after_termination_signal(self) -> None:
         script = (ROOT / "deploy/production/backup-postgres.sh").read_text(encoding="utf-8")

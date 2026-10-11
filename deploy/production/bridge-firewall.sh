@@ -64,7 +64,7 @@ apply_rules() {
   iptables -w -S "$docker_user_chain" >/dev/null
   iptables -w -N "$bridge_rules_chain" 2>/dev/null || true
 
-  # DOCKER-USER 中匹配 DNAT 后的容器地址；只放行 HZC Docker 网段访问 Bridge。
+  # DOCKER-USER 中匹配 DNAT 后的容器地址；只放行 HDZC Docker 网段访问 Bridge。
   while iptables -w -C "$docker_user_chain" -j "$bridge_rules_chain" 2>/dev/null; do
     iptables -w -D "$docker_user_chain" -j "$bridge_rules_chain"
   done
