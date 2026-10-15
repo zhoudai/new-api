@@ -11,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relay/channel/openrouter"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -255,6 +256,10 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 	var simpleResponse dto.OpenAITextResponse
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		if c.Request.Context().Err() != nil {
+			// 上游已发送响应头时，客户端取消仍应停止后续重试与渠道自动禁用。
+			return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusRequestTimeout, types.ErrOptionWithSkipRetry())
+		}
 		return nil, types.NewOpenAIError(err, types.ErrorCodeReadResponseBodyFailed, http.StatusInternalServerError)
 	}
 	logger.LogDebug(c, "upstream response body: %s", responseBody)
@@ -279,8 +284,16 @@ func OpenaiHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Respo
 		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusInternalServerError)
 	}
 
-	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
-		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+	if oaiError := simpleResponse.GetOpenAIError(); oaiError != nil {
+		status := resp.StatusCode
+		if status < http.StatusBadRequest {
+			status = http.StatusBadGateway
+		}
+		return nil, types.WithOpenAIError(*oaiError, status)
+	}
+	if info.RelayMode == relayconstant.RelayModeChatCompletions && len(simpleResponse.Choices) == 0 {
+		// 无聊天结果不能按估算输入用量走成功结算；工具调用等无正文结果仍保留。
+		return nil, types.NewOpenAIError(fmt.Errorf("upstream chat completion returned no choices"), types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
 
 	info.ObserveResponseModel(simpleResponse.Model)

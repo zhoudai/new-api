@@ -2,15 +2,114 @@ package channel
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type cancellationTestAdaptor struct {
+	Adaptor
+	url string
+}
+
+func (a cancellationTestAdaptor) GetRequestURL(*relaycommon.RelayInfo) (string, error) {
+	return a.url, nil
+}
+
+func (a cancellationTestAdaptor) SetupRequestHeader(*gin.Context, *http.Header, *relaycommon.RelayInfo) error {
+	return nil
+}
+
+func TestRelayRequestInheritsClientCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		send func(Adaptor, *gin.Context, *relaycommon.RelayInfo, io.Reader) (*http.Response, error)
+	}{
+		{"json", DoApiRequest},
+		{"form", DoFormRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var called atomic.Bool
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called.Store(true)
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer upstream.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+			response, err := tc.send(cancellationTestAdaptor{url: upstream.URL}, c, info, strings.NewReader("{}"))
+			if response != nil {
+				response.Body.Close()
+			}
+			require.ErrorIs(t, err, context.Canceled)
+			var relayErr *types.NewAPIError
+			require.ErrorAs(t, err, &relayErr)
+			assert.Equal(t, http.StatusRequestTimeout, relayErr.StatusCode)
+			assert.True(t, types.IsSkipRetryError(relayErr))
+			assert.False(t, called.Load(), "取消后的请求不能再触发上游推理")
+		})
+	}
+}
+
+func TestRelayRequestCancellationClosesInflightUpstream(t *testing.T) {
+	started, stopped, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		close(started)
+		select {
+		case <-r.Context().Done():
+			close(stopped)
+		case <-release:
+		}
+	}))
+	defer upstream.Close()
+	defer close(release)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
+	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	result := make(chan error, 1)
+	go func() {
+		response, err := DoApiRequest(cancellationTestAdaptor{url: upstream.URL}, c, info, strings.NewReader("{}"))
+		if response != nil {
+			response.Body.Close()
+		}
+		result <- err
+	}()
+	guard, stopGuard := context.WithTimeout(context.Background(), 3*time.Second)
+	defer stopGuard()
+	select {
+	case <-started:
+	case <-guard.Done():
+		t.Fatal("模拟上游未收到请求")
+	}
+	cancel()
+	select {
+	case err := <-result:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-guard.Done():
+		t.Fatal("取消后平台转发未结束")
+	}
+	select {
+	case <-stopped:
+	case <-guard.Done():
+		t.Fatal("取消未传播到模拟上游连接")
+	}
+}
 
 func TestNewTaskAPIRequestInheritsClientCancellation(t *testing.T) {
 	recorder := httptest.NewRecorder()

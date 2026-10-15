@@ -1,15 +1,18 @@
 package openai
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -18,6 +21,51 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestOpenaiHandlerStopsRetryWhenClientCancelsResponseBody(t *testing.T) {
+	c, recorder, response, info := newResponsesChatTestContext(t, "", false)
+	ctx, cancel := context.WithCancel(c.Request.Context())
+	c.Request = c.Request.WithContext(ctx)
+	cancel()
+	response.Body = io.NopCloser(iotest.ErrReader(context.Canceled))
+	usage, relayErr := OpenaiHandler(c, info, response)
+	require.NotNil(t, relayErr)
+	assert.Equal(t, http.StatusRequestTimeout, relayErr.StatusCode)
+	assert.True(t, types.IsSkipRetryError(relayErr))
+	assert.Nil(t, usage)
+	assert.Empty(t, recorder.Body.String())
+}
+
+func TestOpenaiHandlerRejectsInvalidChatSuccessBeforeUsage(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		body  string
+		valid bool
+	}{
+		{"error without type", `{"error":{"message":"upstream timed out","code":"timeout"}}`, false},
+		{"missing choices", `{}`, false},
+		{"tool call without text", `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"call-1","type":"function","function":{"name":"get_count","arguments":"{}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, recorder, response, info := newResponsesChatTestContext(t, tc.body, false)
+			response.Header.Set("Content-Type", "application/json")
+			info.RelayMode = relayconstant.RelayModeChatCompletions
+			info.SetEstimatePromptTokens(17)
+			usage, relayErr := OpenaiHandler(c, info, response)
+			if !tc.valid {
+				require.NotNil(t, relayErr)
+				assert.Equal(t, http.StatusBadGateway, relayErr.StatusCode)
+				assert.Nil(t, usage, "无有效结果时不能补估用量并走成功结算")
+				assert.Empty(t, recorder.Body.String())
+				return
+			}
+			require.Nil(t, relayErr)
+			require.NotNil(t, usage)
+			assert.Equal(t, 2, usage.CompletionTokens)
+			assert.JSONEq(t, tc.body, recorder.Body.String())
+		})
+	}
+}
 
 func newResponsesChatTestContext(t *testing.T, body string, isStream bool) (*gin.Context, *httptest.ResponseRecorder, *http.Response, *relaycommon.RelayInfo) {
 	t.Helper()
